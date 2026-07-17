@@ -1,0 +1,171 @@
+-- CTE1: Основні метрики по акаунтам
+WITH
+  account_metrics AS (
+    SELECT
+      ses.date,
+      sp.country,
+      acc.send_interval,
+      acc.is_verified,
+      acc.is_unsubscribed,
+      COUNT(DISTINCT ass.account_id) AS account_cnt
+    FROM data-analytics-mate.DA.account_session AS ass
+    INNER JOIN data-analytics-mate.DA.session AS ses
+      ON ass.ga_session_id = ses.ga_session_id
+    INNER JOIN data-analytics-mate.DA.session_params AS sp
+      ON ass.ga_session_id = sp.ga_session_id
+    INNER JOIN data-analytics-mate.DA.account AS acc
+      ON ass.account_id = acc.id
+    GROUP BY ses.date, sp.country, acc.send_interval, acc.is_verified, acc.is_unsubscribed
+  ),
+
+
+
+
+
+
+
+
+  -- CTE2: Основні метрики по емейлам
+  email_metrics AS (
+    SELECT
+      DATE_ADD(ses.date, INTERVAL es.sent_date DAY) AS date,
+      Sp.country,acc.send_interval, acc.is_verified,  acc.is_unsubscribed,
+      COUNT(DISTINCT es.id_message) AS sent_msg,
+      COUNT(DISTINCT eo.id_message) AS open_msg,
+      COUNT(DISTINCT ev.id_message) AS visit_msg
+    FROM data-analytics-mate.DA.account_session AS ass
+    INNER JOIN data-analytics-mate.DA.session AS ses
+      ON ass.ga_session_id = ses.ga_session_id
+    INNER JOIN data-analytics-mate.DA.session_params AS sp
+      ON ass.ga_session_id = sp.ga_session_id
+    INNER JOIN data-analytics-mate.DA.account AS acc
+      ON ass.account_id = acc.id
+    INNER JOIN data-analytics-mate.DA.email_sent AS es
+      ON acc.id = es.id_account
+    LEFT JOIN data-analytics-mate.DA.email_open AS eo
+      ON es.id_message = eo.id_message
+    LEFT JOIN data-analytics-mate.DA.email_visit AS ev
+      ON eo.id_message = ev.id_message
+    GROUP BY ses.date, sp.country, es.sent_date, acc.send_interval, acc.is_verified, acc.is_unsubscribed
+  ),
+
+
+
+
+
+
+
+
+  -- CTE3: Об'єднання акаунтів та емейлів
+  union_metrics AS (
+    SELECT
+      am.date,
+      am.country,
+      am.account_cnt,
+      am.send_interval,
+      am.is_verified,
+      am.is_unsubscribed,
+      0 AS sent_msg,
+      0 AS open_msg,
+      0 AS visit_msg
+    FROM account_metrics am
+
+
+
+
+    UNION ALL
+    SELECT
+      em.date,
+      em.country,
+      0 AS account_cnt,
+      send_interval,
+      is_verified,
+      is_unsubscribed,
+      em.sent_msg,
+      em.open_msg,
+      em.visit_msg
+    FROM email_metrics em
+
+
+
+
+  ),
+
+
+
+
+-- CTE4: групуємо в розрізах
+grouped AS (
+Select     um.date,
+      um.country,
+    SUM(account_cnt) as account_cnt,
+    send_interval,
+    is_verified,
+    is_unsubscribed,
+    SUM(sent_msg) as sent_msg,
+    SUM(open_msg) as open_msg,
+    SUM(visit_msg) as visit_msg,
+from union_metrics um
+Group by um.date, um.country, um.send_interval, um.is_verified, um.is_unsubscribed
+
+
+
+
+),
+  -- CTE5: Тотали по країнах (агрегація тільки по країні)
+  country_totals AS (
+    SELECT
+      country,
+      SUM(account_cnt) AS total_country_account_cnt,
+      SUM(sent_msg) AS total_country_sent_cnt
+    FROM grouped
+    GROUP BY country
+  ),
+
+
+
+
+
+
+
+
+  -- CTE6: Ранки по країнах
+  country_ranks AS (
+    SELECT
+      country,
+      DENSE_RANK() OVER (ORDER BY total_country_account_cnt DESC) AS rank_total_country_account_cnt,
+      DENSE_RANK() OVER (ORDER BY total_country_sent_cnt DESC) AS rank_total_country_sent_cnt
+    FROM country_totals
+  
+-- Фінальний запит
+SELECT
+  u.date,
+  u.country,
+  u.send_interval,
+  u.is_verified,
+  u.is_unsubscribed,
+  u.account_cnt,
+  u.sent_msg,
+  u.open_msg,
+  u.visit_msg,
+  ct.total_country_account_cnt,
+  ct.total_country_sent_cnt,
+  cr.rank_total_country_account_cnt,
+  cr.rank_total_country_sent_cnt
+FROM grouped u
+JOIN country_totals ct
+  ON u.country = ct.country
+JOIN country_ranks cr
+  ON u.country = cr.country
+WHERE cr.rank_total_country_account_cnt <= 10
+  OR cr.rank_total_country_sent_cnt<=10
+ORDER BY u.date
+
+
+
+
+
+Looker Studio:
+https://datastudio.google.com/reporting/e2fee2dd-1d8e-4b35-bc98-a65358c79bd3
+
+
